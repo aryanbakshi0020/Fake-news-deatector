@@ -44,16 +44,20 @@ def load_and_prepare_data(csv_path=DATASET_PATH):
     df = df[["text", "label"]].dropna().copy()
     df["text"] = df["text"].map(clean_text)
     df["label"] = df["label"].map(normalize_label)
-    return df[df["text"].str.len() > 0].reset_index(drop=True)
+    df = df[df["text"].str.len() > 0].reset_index(drop=True)
+    if df["label"].nunique() < 2:
+        raise ValueError("The dataset must contain both REAL and FAKE examples.")
+    return df
 
 
 def train_model(df):
+    if len(df) < 8:
+        raise ValueError("Upload at least 8 labeled rows so the model can be evaluated.")
     x_train, x_test, y_train, y_test = train_test_split(
         df["text"], df["label"], test_size=0.25, random_state=42, stratify=df["label"]
     )
-    vectorizer = TfidfVectorizer(
-        stop_words=ENGLISH_STOPWORDS, ngram_range=(1, 2), max_df=0.95, min_df=2
-    )
+    min_df = 1 if len(df) < 30 else 2
+    vectorizer = TfidfVectorizer(stop_words=ENGLISH_STOPWORDS, ngram_range=(1, 2), max_df=0.95, min_df=min_df)
     x_train_vec = vectorizer.fit_transform(x_train)
     x_test_vec = vectorizer.transform(x_test)
     model = LogisticRegression(max_iter=2000, class_weight="balanced")
@@ -62,7 +66,7 @@ def train_model(df):
     labels = ["FAKE", "REAL"]
     metrics = {
         "accuracy": accuracy_score(y_test, predictions),
-        "f1": f1_score(y_test, predictions, pos_label="REAL"),
+        "f1": f1_score(y_test, predictions, pos_label="REAL", zero_division=0),
         "report": classification_report(y_test, predictions, labels=labels, zero_division=0),
         "matrix": confusion_matrix(y_test, predictions, labels=labels),
         "samples": len(df),
@@ -75,11 +79,7 @@ def predict_news(model, vectorizer, news_text):
     probabilities = model.predict_proba(vector)[0]
     prediction = model.predict(vector)[0]
     class_index = list(model.classes_).index(prediction)
-    return {
-        "label": "REAL NEWS" if prediction == "REAL" else "FAKE NEWS",
-        "confidence": float(probabilities[class_index]),
-        "probabilities": dict(zip(model.classes_, probabilities)),
-    }
+    return {"label": "REAL NEWS" if prediction == "REAL" else "FAKE NEWS", "confidence": float(probabilities[class_index]), "probabilities": dict(zip(model.classes_, probabilities))}
 
 
 def explain_prediction(model, vectorizer, news_text, limit=8):
