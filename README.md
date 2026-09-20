@@ -1,40 +1,44 @@
-# Fake News Detector
+# TruthLens — AI News Credibility Analyzer
 
-A simple machine-learning project that classifies news articles as real or fake using TF-IDF features and logistic regression.
+TruthLens is a portfolio-ready Streamlit application that uses TF-IDF features and balanced Logistic Regression to screen news text as likely REAL or FAKE. It includes confidence scores, model metrics, and interpretable term-level signals.
 
-## What this project does
+> This model detects patterns learned from the supplied dataset; it does not prove whether a claim is true. Always verify consequential information with reputable sources.
 
-- Loads a dataset from `news.csv`
-- Cleans and preprocesses the text
-- Converts article text to TF-IDF vectors
-- Trains a Logistic Regression model
-- Evaluates the model on a test set
-- Predicts whether a new article is likely real or fake
+## Dataset
 
-## Run it
+Place `news.csv` in the repository root. It must contain:
 
-1. Make sure Python is installed.
-2. Install dependencies:
+```csv
+text,label
+"Your article text",REAL
+"Another article",FAKE
+```
+
+Labels can be `REAL`/`FAKE` or `1`/`0`.
+
+## Run locally
 
 ```bash
+python -m venv .venv
+# macOS/Linux: source .venv/bin/activate
+# Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+streamlit run app.py
 ```
 
-3. Add your dataset file named `news.csv` in the project folder.
-4. Run the script:
+The original command-line version remains available with `python Code`.
 
-```bash
-python Code
-```
+## Deploy on Streamlit Community Cloud
 
-You can also pass a sentence directly:
+1. Push this repository to GitHub, including `app.py`, `detector.py`, `requirements.txt`, and `news.csv` (or provide the dataset through a private data workflow).
+2. Visit [share.streamlit.io](https://share.streamlit.io/) and connect GitHub.
+3. Select `aryanbakshi0020/Fake-news-deatector`.
+4. Set the main file to `app.py` and deploy.
 
-```bash
-python Code "This is a headline about a local city event and a new public policy update."
-```
+## Portfolio highlights
 
-## Notes
-
-- The dataset should contain at least two columns: `text` and `label`.
-- Labels may be `REAL` / `FAKE` or `1` / `0`.
-- The script uses a logistic regression model and is meant as a simple text-classification baseline.
+- Reproducible preprocessing and stratified evaluation
+- Confidence scores and F1/accuracy metrics
+- Explainable TF-IDF feature signals
+- Responsive web UI with graceful missing-data errors
+- Clear limitation notice for responsible ML use
