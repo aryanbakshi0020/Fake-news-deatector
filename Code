@@ -1,58 +1,1215 @@
+import html
+import re
+import sys
+from pathlib import Path
 
 import pandas as pd
-import re
 import nltk
-from sklearn.model_selection import train_test_split
+from nltk.corpus import stopwords
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, classification_report
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.model_selection import train_test_split
 
-nltk.download('stopwords')
-from nltk.corpus import stopwords
 
-df = pd.read_csv("news.csv")
-df = df[['text', 'label']]
-df.dropna(inplace=True)
+try:
+    stopwords.words("english")
+except LookupError:
+    nltk.download("stopwords", quiet=True)
+
+
+DATASET_PATH = Path("news.csv")
+
 
 def clean_text(text):
+    text = str(text or "")
+    text = html.unescape(text)
     text = text.lower()
-    text = re.sub(r'\W', ' ', text)
-    text = re.sub(r'\s+', ' ', text)
+    text = re.sub(r"https?://\S+|www\.\S+", " ", text)
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
     return text
 
-df['text'] = df['text'].apply(clean_text)
 
-X = df['text']
-y = df['label']
+def normalize_label(value):
+    value = str(value).strip().lower()
+    label_map = {
+        "real": "REAL",
+        "true": "REAL",
+        "reliable": "REAL",
+        "1": "REAL",
+        "1.0": "REAL",
+        "fake": "FAKE",
+        "false": "FAKE",
+        "unreliable": "FAKE",
+        "0": "FAKE",
+        "0.0": "FAKE",
+    }
 
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.25, random_state=42
-)
+    if value in label_map:
+        return label_map[value]
 
-vectorizer = TfidfVectorizer(
-    stop_words=stopwords.words('english'),
-    max_df=0.7
-)
+    if value.startswith("real"):
+        return "REAL"
+    if value.startswith("fake"):
+        return "FAKE"
 
-X_train_vec = vectorizer.fit_transform(X_train)
-X_test_vec = vectorizer.transform(X_test)
+    raise ValueError(f"Unsupported label value: {value!r}. Please use REAL/FAKE or 0/1.")
 
-model = LogisticRegression()
-model.fit(X_train_vec, y_train)
 
-y_pred = model.predict(X_test_vec)
+def load_and_prepare_data(csv_path):
+    df = pd.read_csv(csv_path)
 
-print(accuracy_score(y_test, y_pred))
-print(classification_report(y_test, y_pred))
+    required_columns = {"text", "label"}
+    missing = required_columns - set(df.columns)
+    if missing:
+        raise ValueError(f"Dataset is missing required columns: {sorted(missing)}")
 
-def predict_news(news_text):
-    news_text = clean_text(news_text)
-    vector = vectorizer.transform([news_text])
-    prediction = model.predict(vector)
-    return "REAL NEWS" if prediction[0] == 1 else "FAKE NEWS"
+    df = df[["text", "label"]].dropna().copy()
+    df["label"] = df["label"].apply(normalize_label)
+    df["text"] = df["text"].apply(clean_text)
+    df = df[df["text"].str.len() > 0]
 
-while True:
-    text = input()
-    if text.lower() == "exit":
-        break
-    print(predict_news(text))
+    label_to_int = {"REAL": 1, "FAKE": 0}
+    df["label_code"] = df["label"].map(label_to_int)
+
+    return df
+
+
+def train_model(df):
+    X = df["text"]
+    y = df["label_code"]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y,
+        test_size=0.25,
+        random_state=42,
+        stratify=y,
+    )
+
+    vectorizer = TfidfVectorizer(
+        stop_words=stopwords.words("english"),
+        ngram_range=(1, 2),
+        max_df=0.95,
+        min_df=2,
+    )
+
+    X_train_vec = vectorizer.fit_transform(X_train)
+    X_test_vec = vectorizer.transform(X_test)
+
+    model = LogisticRegression(max_iter=2000, class_weight="balanced")
+    model.fit(X_train_vec, y_train)
+
+    y_pred = model.predict(X_test_vec)
+
+    accuracy = accuracy_score(y_test, y_pred)
+    report = classification_report(y_test, y_pred, target_names=["FAKE", "REAL"])
+    matrix = confusion_matrix(y_test, y_pred)
+
+    print(f"Accuracy: {accuracy:.4f}")
+    print("\nClassification Report:")
+    print(report)
+    print("\nConfusion Matrix:")
+    print(matrix)
+
+    return model, vectorizer
+
+
+def predict_news(model, vectorizer, news_text):
+    cleaned = clean_text(news_text)
+    vector = vectorizer.transform([cleaned])
+    probability = model.predict_proba(vector)[0]
+    prediction_code = int(model.predict(vector)[0])
+    confidence = probability[prediction_code]
+
+    label = "REAL NEWS" if prediction_code == 1 else "FAKE NEWS"
+    return label, float(confidence)
+
+
+if __name__ == "__main__":
+    if not DATASET_PATH.exists():
+        raise FileNotFoundError(f"Dataset not found: {DATASET_PATH}. Please place news.csv in the same folder as this script.")
+
+    df = load_and_prepare_data(DATASET_PATH)
+    model, vectorizer = train_model(df)
+
+    print("\nType a news article and press Enter. Type 'exit' to quit.\n")
+
+    while True:
+        text = input("News text: ").strip()
+        if text.lower() == "exit":
+            print("Goodbye!")
+            break
+
+        if not text:
+            print("Please enter some text.")
+            continue
+
+        prediction, confidence = predict_news(model, vectorizer, text)
+        print(f"Prediction: {prediction} | Confidence: {confidence:.2%}\n")
+
+    if len(sys.argv) > 1:
+        user_input = " ".join(sys.argv[1:])
+        prediction, confidence = predict_news(model, vectorizer, user_input)
+        print(f"Prediction: {prediction} | Confidence: {confidence:.2%}")
+    
+    """Example usage:
+    python Code
+    python Code "This is an article about a local event in the city"
+    """
+
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    """
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    """
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"""""""""""""""""""""""""""""""""""
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"""""""""""""""""""""""""""""""""""""""""""""""""""
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def get_prediction_info(model, vectorizer, text):
+    cleaned = clean_text(text)
+    vector = vectorizer.transform([cleaned])
+    probability = model.predict_proba(vector)[0]
+    prediction_code = int(model.predict(vector)[0])
+    confidence = probability[prediction_code]
+    label = "REAL NEWS" if prediction_code == 1 else "FAKE NEWS"
+    return label, float(confidence)
+
+
+if __name__ == "__main__":
+    dataset = Path("news.csv")
+    if not dataset.exists():
+        raise FileNotFoundError("news.csv not found in the current folder.")
+
+    df = load_and_prepare_data(dataset)
+    model, vectorizer = train_model(df)
+
+    if len(sys.argv) > 1:
+        user_text = " ".join(sys.argv[1:])
+        label, confidence = get_prediction_info(model, vectorizer, user_text)
+        print(f"Prediction: {label} | Confidence: {confidence:.2%}")
+    else:
+        print("Type a news article or 'exit' to quit.")
+        while True:
+            text = input("News text: ")
+            if text.lower() == "exit":
+                break
+            label, confidence = get_prediction_info(model, vectorizer, text)
+            print(f"Prediction: {label} | Confidence: {confidence:.2%}")
+    
+    """This script loads a fake-vs-real news dataset, trains a TF-IDF + Logistic Regression model,
+    evaluates it on a held-out test set, and then lets you predict labels for new text input.
+    """
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"""
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
