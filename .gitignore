@@ -1,4 +1,14 @@
 __pycache__/
 .venv/
 *.pyc
-.streamlit/secrets.toml
+.ipynb_checkpoints/
+*.joblib
+*.pkl
+*.bin
+*.pt
+*.ckpt
+*.csv
+!data/raw/.gitkeep
+!data/refined/.gitkeep
+!models/baseline/.gitkeep
+!models/transformer/.gitkeep
